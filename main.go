@@ -4,84 +4,136 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"syscall"
 	"time"
 
+	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
-	// "time"
 )
 
 const (
 	MAX_HOPS = 3000
 )
 
-func TraceRoute(dest net.IP, timeout int) (ips []string, err error) {
-	to := time.Millisecond * time.Duration(timeout)
+type Result struct {
+	ip   *net.Addr
+	ping *time.Duration
+	hop  *int
+}
 
-	udpAddr := net.UDPAddr{IP: dest, Port: 33434}
+func ICMPTracert(dest string, timeout int) (ips []Result, err error) {
+	to := time.Second * time.Duration(timeout)
 
-	UDPconn, err := net.DialUDP("udp4", nil, &udpAddr)
+	address, err := net.ResolveIPAddr("ip4", dest)
 
 	if err != nil {
 		printErr(err, 1)
 		return ips, err
 	}
 
-	UDPconn.SetDeadline(time.Now().Add(to))
-	defer UDPconn.Close()
+	icmpConn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 
-	for hop := 1; hop <= MAX_HOPS; hop++ {
+	if err != nil {
+		printErr(err, 2)
+		return ips, err
+	}
 
-		icmpConn, err := net.ListenPacket("ip4:icmp", "0.0.0.0")
+	icmpConn.SetDeadline(time.Now().Add(to))
+
+	defer icmpConn.Close()
+
+	for ttl := 1; ttl <= MAX_HOPS; ttl++ {
+
+		// setting ttl
+		icmpConn.IPv4PacketConn().SetTTL(ttl)
+
+		sendMsg := icmp.Message{
+			Type: ipv4.ICMPTypeEcho,
+			Code: 0,
+			Body: &icmp.Echo{
+				ID:   os.Getpid() & 0xffff,
+				Seq:  ttl,
+				Data: []byte(""),
+			},
+		}
+
+		writeBuf, err := sendMsg.Marshal(nil)
 
 		if err != nil {
 			printErr(err, 2)
 			return ips, err
 		}
 
-		// setting ttl
-		ipv4.NewConn(UDPconn).SetTTL(hop)
+		start := time.Now()
 
-		icmpConn.SetDeadline(time.Now().Add(to))
+		if _, err := icmpConn.WriteTo(writeBuf, address); err != nil {
+			// printErr(err, 3)
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				ips = append(ips, Result{})
+				fmt.Println("*")
+				if ttl == MAX_HOPS {
+					return ips, err
+				}
+				continue
+			} else {
+				printErr(err, 4)
+				return ips, err
+			}
+		}
 
-		defer icmpConn.Close()
+		buffer := make([]byte, 11500)
 
-		data := make([]byte, 0)
-
-		_, err = UDPconn.Write(data)
+		n, addr, err := icmpConn.ReadFrom(buffer)
 
 		if err != nil {
 			if errors.Is(err, syscall.EHOSTUNREACH) {
 				return ips, nil
 			}
-			printErr(err, 3)
-			return ips, err
+
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				ips = append(ips, Result{})
+				fmt.Println("*")
+				if ttl == MAX_HOPS {
+					return ips, err
+				}
+				continue
+			} else {
+				printErr(err, 4)
+				return ips, err
+			}
+
 		}
 
-		// Create a buffer to read the response
-		buffer := make([]byte, 11500)
+		duration := time.Since(start)
 
-		_, addr, err := icmpConn.ReadFrom(buffer)
+		incomingMessage, err := icmp.ParseMessage(1, buffer[:n])
 
 		if err != nil {
-			if errors.Is(err, syscall.ECONNREFUSED) {
-				printErr(err, 4)
+			return nil, err
+		}
 
-			} else if errors.Is(err, syscall.EHOSTUNREACH) {
-				return ips, nil
-			} else {
-				printErr(err, 5)
+		switch incomingMessage.Type {
+		case ipv4.ICMPTypeEchoReply:
+			res := Result{
+				ip:   &addr,
+				ping: &duration,
+				hop:  &ttl,
 			}
+			fmt.Printf("%d %s (%v)\n", ttl, addr, duration)
+			ips = append(ips, res)
+			return ips, nil
+		case ipv4.ICMPTypeTimeExceeded:
+			res := Result{
+				ip:   &addr,
+				ping: &duration,
+				hop:  &ttl,
+			}
+			fmt.Printf("%d %s (%v)\n", ttl, addr, duration)
+			ips = append(ips, res)
+		default:
+			ips = append(ips, Result{})
 		}
-
-		println(addr.String())
-
-		ips = append(ips, addr.String())
-
-		if dest.String() == addr.String() {
-			return ips, err
-		}
-
 	}
 
 	return ips, err
@@ -93,12 +145,12 @@ func printErr(error error, id int) {
 }
 
 func main() {
-	ips, err := TraceRoute(net.IPv4(1, 1, 1, 1), 100)
+	ips, err := ICMPTracert("187.72.245.197", 10)
 
 	if err != nil {
-		printErr(err, 888)
+		printErr(err, 0)
 	}
 
-	fmt.Printf("%v\n", ips)
+	fmt.Printf("%v\n", &ips)
 
 }
