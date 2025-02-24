@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	MAX_HOPS = 3000
+	MAX_HOPS = 30
 )
 
 type Result struct {
-	ip   *net.Addr
-	ping *time.Duration
-	hop  *int
+	ip   net.Addr
+	ping time.Duration
+	hop  int
 }
 
 func ICMPTracert(dest string, timeout int) (ips []Result, err error) {
@@ -44,7 +44,6 @@ func ICMPTracert(dest string, timeout int) (ips []Result, err error) {
 	defer icmpConn.Close()
 
 	for ttl := 1; ttl <= MAX_HOPS; ttl++ {
-
 		// setting ttl
 		icmpConn.IPv4PacketConn().SetTTL(ttl)
 
@@ -68,7 +67,6 @@ func ICMPTracert(dest string, timeout int) (ips []Result, err error) {
 		start := time.Now()
 
 		if _, err := icmpConn.WriteTo(writeBuf, address); err != nil {
-			// printErr(err, 3)
 			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
 				ips = append(ips, Result{})
 				fmt.Println("*")
@@ -116,18 +114,18 @@ func ICMPTracert(dest string, timeout int) (ips []Result, err error) {
 		switch incomingMessage.Type {
 		case ipv4.ICMPTypeEchoReply:
 			res := Result{
-				ip:   &addr,
-				ping: &duration,
-				hop:  &ttl,
+				ip:   addr,
+				ping: duration,
+				hop:  ttl,
 			}
 			fmt.Printf("%d %s (%v)\n", ttl, addr, duration)
 			ips = append(ips, res)
 			return ips, nil
 		case ipv4.ICMPTypeTimeExceeded:
 			res := Result{
-				ip:   &addr,
-				ping: &duration,
-				hop:  &ttl,
+				ip:   addr,
+				ping: duration,
+				hop:  ttl,
 			}
 			fmt.Printf("%d %s (%v)\n", ttl, addr, duration)
 			ips = append(ips, res)
@@ -145,7 +143,7 @@ func printErr(error error, id int) {
 }
 
 func main() {
-	ips, err := ICMPTracert("187.72.245.197", 10)
+	ips, err := ICMPTracert("177.79.86.166", 10)
 
 	if err != nil {
 		printErr(err, 0)
